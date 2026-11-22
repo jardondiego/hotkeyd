@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    name: selftest & release build (macOS)
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run selftest suite
+        run: ./scripts/test.sh
+
+      - name: Build release binaries
+        run: swift build -c release
