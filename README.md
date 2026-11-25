@@ -23,6 +23,35 @@ hotkeyd daemon install
 hotkeyd doctor
 ```
 
+## Install
+
+Requires **macOS 14.5+** and Apple Command Line Tools 16+ (Swift 6, tested on Apple Silicon) — no Xcode needed.
+
+```bash
+git clone https://github.com/jardondiego/hotkeyd.git
+cd hotkeyd
+./scripts/setup-signing.sh
+./scripts/build.sh
+export PATH="$HOME/.local/bin:$PATH"   # add this line to ~/.zshrc to persist
+hotkeyd init
+```
+
+`setup-signing.sh` creates a dedicated local signing keychain (`~/Library/Keychains/hotkeyd-signing.keychain-db`, `0600`, auto-locked). `build.sh` compiles from source, asks to unlock that keychain once to sign with Hardened Runtime (`CS_RUNTIME`) and a leaf-anchored Designated Requirement, installs `~/.local/bin/hotkeyd`, and installs the `hotkeyd(1)` manual page (`~/.local/share/man/man1/hotkeyd.1`). If you prefer not to edit `PATH`, invoke `~/.local/bin/hotkeyd init` directly.
+
+**Just trying it out?** You can skip the local signing keychain with `--adhoc`:
+
+```bash
+./scripts/build.sh --adhoc
+export PATH="$HOME/.local/bin:$PATH"   # add this line to ~/.zshrc to persist
+hotkeyd init --allow-adhoc
+```
+
+> Local certificate signing (`setup-signing.sh`) is recommended for daily use — without it, macOS resets Accessibility permission whenever you rebuild or upgrade, and `SELECTED_TEXT` / `--allow-accessibility` stay disabled. You can switch anytime with `./scripts/setup-signing.sh && ./scripts/build.sh --install`.
+
+`hotkeyd init` guides first-time setup in under a minute: validates binary trust and `~/.hotkeyd`, optionally creates 3 auto-detected starter shortcuts (default browser, active terminal, Home folder), installs the LaunchAgent with live Accessibility polling, and runs a safe live trigger verification. You can also install dynamic shell completions (`hotkeyd completions zsh --install`) and read `man hotkeyd`.
+
+`hotkeyd doctor` tells you exactly what is missing and how to fix it.
+
 ## Why this is not "just another hotkey app"
 
 **It can take keys apps already use.** A session-level `CGEventTap` sees key events before the
@@ -79,38 +108,6 @@ to execute and inspect a shell action without a keyboard, and `doctor` with auth
 | **Raycast** | Full GUI launcher & extension suite | External (Hyper key) | No | Alias/extension | GUI launcher | No | GUI app |
 
 Use **hotkeyd** if you want a fast, single-file, version-controlled CLI hotkey daemon with left/right modifier double-taps, two-step sequences, safe `SELECTED_TEXT` scripts, and an optional cheatsheet/search HUD without running a GUI app or Lua runtime. Use **Karabiner-Elements** if you need low-level keyboard layers/remapping, or **Hammerspoon** if you want full Lua window-management scripting.
-
-## Requirements
-
-- macOS 14.5 or newer (Swift 6 / Command Line Tools 16+; tested on Apple Silicon)
-- Command Line Tools only — no Xcode needed
-
-## Install
-
-```bash
-git clone https://github.com/jardondiego/hotkeyd.git
-cd hotkeyd
-./scripts/setup-signing.sh
-./scripts/build.sh
-export PATH="$HOME/.local/bin:$PATH"   # add this line to ~/.zshrc to persist
-hotkeyd init
-```
-
-`setup-signing.sh` creates a dedicated local signing keychain (`~/Library/Keychains/hotkeyd-signing.keychain-db`, `0600`, auto-locked). `build.sh` compiles from source, asks to unlock that keychain once to sign with Hardened Runtime (`CS_RUNTIME`) and a leaf-anchored Designated Requirement, installs `~/.local/bin/hotkeyd`, and installs the `hotkeyd(1)` manual page (`~/.local/share/man/man1/hotkeyd.1`). If you prefer not to edit `PATH`, invoke `~/.local/bin/hotkeyd init` directly.
-
-**Just trying it out?** You can skip the local signing keychain with `--adhoc`:
-
-```bash
-./scripts/build.sh --adhoc
-export PATH="$HOME/.local/bin:$PATH"   # add this line to ~/.zshrc to persist
-hotkeyd init --allow-adhoc
-```
-
-> Local certificate signing (`setup-signing.sh`) is recommended for daily use — without it, macOS resets Accessibility permission whenever you rebuild or upgrade, and `SELECTED_TEXT` / `--allow-accessibility` stay disabled. You can switch anytime with `./scripts/setup-signing.sh && ./scripts/build.sh --install`.
-
-`hotkeyd init` guides first-time setup in under a minute: validates binary trust and `~/.hotkeyd`, optionally creates 3 auto-detected starter shortcuts (default browser, active terminal, Home folder), installs the LaunchAgent with live Accessibility polling, and runs a safe live trigger verification. You can also install dynamic shell completions (`hotkeyd completions zsh --install`) and read `man hotkeyd`.
-
-`hotkeyd doctor` tells you exactly what is missing and how to fix it.
 
 ## Commands
 
