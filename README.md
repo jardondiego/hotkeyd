@@ -98,6 +98,16 @@ hotkeyd init
 
 `setup-signing.sh` creates a dedicated local signing keychain (`~/Library/Keychains/hotkeyd-signing.keychain-db`, `0600`, auto-locked). `build.sh` compiles from source, asks to unlock that keychain once to sign with Hardened Runtime (`CS_RUNTIME`) and a leaf-anchored Designated Requirement, installs `~/.local/bin/hotkeyd`, and installs the `hotkeyd(1)` manual page (`~/.local/share/man/man1/hotkeyd.1`). If you prefer not to edit `PATH`, invoke `~/.local/bin/hotkeyd init` directly.
 
+**Just trying it out?** You can skip the local signing keychain with `--adhoc`:
+
+```bash
+./scripts/build.sh --adhoc
+export PATH="$HOME/.local/bin:$PATH"   # add this line to ~/.zshrc to persist
+hotkeyd init --allow-adhoc
+```
+
+> Local certificate signing (`setup-signing.sh`) is recommended for daily use — without it, macOS resets Accessibility permission whenever you rebuild or upgrade, and `SELECTED_TEXT` / `--allow-accessibility` stay disabled. You can switch anytime with `./scripts/setup-signing.sh && ./scripts/build.sh --install`.
+
 `hotkeyd init` guides first-time setup in under a minute: validates binary trust and `~/.hotkeyd`, optionally creates 3 auto-detected starter shortcuts (default browser, active terminal, Home folder), installs the LaunchAgent with live Accessibility polling, and runs a safe live trigger verification. You can also install dynamic shell completions (`hotkeyd completions zsh --install`) and read `man hotkeyd`.
 
 `hotkeyd doctor` tells you exactly what is missing and how to fix it.
@@ -317,6 +327,7 @@ See [SECURITY.md](SECURITY.md) for vulnerability reporting and [CHANGELOG.md](CH
 ./scripts/test.sh --filter init      # fast targeted run of one test suite (--list to see all)
 ./scripts/build.sh                   # build + sign + install binary & man page (restarts daemon)
 ./scripts/build.sh --install
+./scripts/build.sh --adhoc --install # skip local cert keychain (resets Accessibility on rebuild)
 swift run hotkeyd-dev listen         # uninstalled interactive event-tap inspector (TTY only)
 ```
 

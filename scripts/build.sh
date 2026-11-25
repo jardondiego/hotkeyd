@@ -7,28 +7,38 @@ cd "$(dirname "$0")/.."
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/build.sh [--install | --no-restart | --help]
+Usage: ./scripts/build.sh [--adhoc] [--install | --no-restart | --help]
 
 Builds a release hotkeyd binary, signs it with Hardened Runtime (CS_RUNTIME)
 and a leaf-anchored designated requirement from hotkeyd-signing.keychain-db,
 and installs it atomically to ~/.local/bin/hotkeyd (override with HOTKEYD_BIN).
 
 Options:
+  --adhoc       Skip the local certificate keychain and ad-hoc sign with
+                Hardened Runtime (CS_RUNTIME). Handy for trying hotkeyd out,
+                but macOS resets Accessibility permission on every rebuild
+                and SELECTED_TEXT / --allow-accessibility stay disabled.
+                Run ./scripts/setup-signing.sh to avoid both.
   --install     Install/bootstrap the LaunchAgent after building and signing
+                (passes --allow-adhoc when combined with --adhoc)
   --no-restart  Install the binary without restarting a running LaunchAgent
   --help, -h    Show this help message
 EOF
 }
 
 MODE=""
-if [[ $# -gt 1 ]]; then
-  echo "error: unexpected extra arguments" >&2
-  usage >&2
-  exit 2
-fi
-if [[ $# -eq 1 ]]; then
+ADHOC=0
+while [[ $# -gt 0 ]]; do
   case "$1" in
+    --adhoc)
+      ADHOC=1
+      ;;
     --install|--no-restart)
+      if [[ -n "$MODE" && "$MODE" != "$1" ]]; then
+        echo "error: cannot combine $MODE with $1" >&2
+        usage >&2
+        exit 2
+      fi
       MODE="$1"
       ;;
     --help|-h)
@@ -41,7 +51,8 @@ if [[ $# -eq 1 ]]; then
       exit 2
       ;;
   esac
-fi
+  shift
+done
 
 reject_control_chars() {
   local label="$1"
@@ -50,7 +61,7 @@ reject_control_chars() {
     echo "error: $label must not contain newline or carriage-return characters" >&2
     exit 2
   fi
-  if printf '%s' "$value" | /usr/bin/LC_ALL=C /usr/bin/grep -q '[[:cntrl:]]'; then
+  if printf '%s' "$value" | LC_ALL=C /usr/bin/grep -q '[[:cntrl:]]'; then
     echo "error: $label must not contain control characters" >&2
     exit 2
   fi
@@ -80,37 +91,45 @@ if [[ -n "${HOTKEYD_SIGNING_PASSWORD:-}" ]]; then
   reject_control_chars "HOTKEYD_SIGNING_PASSWORD" "$HOTKEYD_SIGNING_PASSWORD"
 fi
 
-if [[ -L "$KEYCHAIN" ]]; then
-  echo "error: refusing symlinked signing keychain at $KEYCHAIN" >&2
-  exit 1
-fi
-if [[ ! -f "$KEYCHAIN" ]]; then
-  echo "error: signing keychain not found at $KEYCHAIN" >&2
-  echo "run ./scripts/setup-signing.sh first." >&2
-  exit 1
-fi
-
-CERT_SHA1="$(/usr/bin/security find-certificate -c "$CERT_NAME" -Z "$KEYCHAIN" 2>/dev/null | /usr/bin/awk '/SHA-1 hash:/ { print tolower($3); exit }')"
-if [[ -z "$CERT_SHA1" ]]; then
-  echo "error: certificate '$CERT_NAME' not found in $KEYCHAIN" >&2
-  echo "run ./scripts/setup-signing.sh first." >&2
-  exit 1
-fi
-
+CERT_SHA1=""
 ORIG_KEYCHAINS=()
-while IFS= read -r line; do
-  cleaned="$(printf '%s\n' "$line" | /usr/bin/sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//')"
-  if [[ -n "$cleaned" ]]; then
-    ORIG_KEYCHAINS+=("$cleaned")
-  fi
-done < <(/usr/bin/security list-keychains -d user)
-
 STAGE_FILES=()
 LOCK_ON_EXIT=0
-KEYCHAIN_LIST_RESTORED=0
+KEYCHAIN_LIST_RESTORED=1
+
+if [[ "$ADHOC" -eq 0 ]]; then
+  if [[ -L "$KEYCHAIN" ]]; then
+    echo "error: refusing symlinked signing keychain at $KEYCHAIN" >&2
+    exit 1
+  fi
+  if [[ ! -f "$KEYCHAIN" ]]; then
+    echo "error: signing keychain not found at $KEYCHAIN" >&2
+    echo "run ./scripts/setup-signing.sh first (recommended — keeps macOS Accessibility across rebuilds)." >&2
+    echo "or pass --adhoc to skip local certificate setup (resets Accessibility on rebuilds; disables SELECTED_TEXT)." >&2
+    exit 1
+  fi
+
+  CERT_SHA1="$(/usr/bin/security find-certificate -c "$CERT_NAME" -Z "$KEYCHAIN" 2>/dev/null | /usr/bin/awk '/SHA-1 hash:/ { print tolower($3); exit }')"
+  if [[ -z "$CERT_SHA1" ]]; then
+    echo "error: certificate '$CERT_NAME' not found in $KEYCHAIN" >&2
+    echo "run ./scripts/setup-signing.sh first (or pass --adhoc to skip local certificate setup)." >&2
+    exit 1
+  fi
+
+  while IFS= read -r line; do
+    cleaned="$(printf '%s\n' "$line" | /usr/bin/sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//')"
+    if [[ -n "$cleaned" ]]; then
+      ORIG_KEYCHAINS+=("$cleaned")
+    fi
+  done < <(/usr/bin/security list-keychains -d user)
+  KEYCHAIN_LIST_RESTORED=0
+fi
+
 restore_and_lock_keychain() {
-  if [[ "$KEYCHAIN_LIST_RESTORED" == "0" && ${#ORIG_KEYCHAINS[@]} -gt 0 ]]; then
-    /usr/bin/security list-keychains -d user -s "${ORIG_KEYCHAINS[@]}" >/dev/null 2>&1 || true
+  if [[ "$ADHOC" -eq 0 && "$KEYCHAIN_LIST_RESTORED" == "0" ]]; then
+    if [[ ${#ORIG_KEYCHAINS[@]} -gt 0 ]]; then
+      /usr/bin/security list-keychains -d user -s "${ORIG_KEYCHAINS[@]}" >/dev/null 2>&1 || true
+    fi
     KEYCHAIN_LIST_RESTORED=1
   fi
   if [[ "$LOCK_ON_EXIT" == "1" ]]; then
@@ -137,25 +156,29 @@ if [[ -f "$RELEASE_BIN_DIR/hotkeyd-dev" ]]; then
 fi
 
 BIN="$RELEASE_BIN_DIR/hotkeyd"
-REQ="=designated => identifier \"$BUNDLE_ID\" and certificate leaf = H\"$CERT_SHA1\""
+REQ=""
 
-LOCK_ON_EXIT=1
-if [[ -n "${HOTKEYD_SIGNING_PASSWORD:-}" ]]; then
-  # Pipe via `security -i` stdin with pre-validated double-quoted escaping so the password never appears in `ps`.
-  Q_PASS="$(security_quote "$HOTKEYD_SIGNING_PASSWORD")"
-  Q_KEYCHAIN="$(security_quote "$KEYCHAIN")"
-  printf 'unlock-keychain -p %s %s\n' "$Q_PASS" "$Q_KEYCHAIN" | /usr/bin/security -i
-elif ! /usr/bin/security show-keychain-info "$KEYCHAIN" >/dev/null 2>&1; then
-  # Note: in a macOS GUI session, `show-keychain-info` prompts via SecurityAgent and unlocks
-  # `$KEYCHAIN` when approved; we only reach here if that dialog was cancelled or unavailable.
-  if [[ ! -t 0 ]]; then
-    echo "error: $KEYCHAIN remains locked (run ./scripts/build.sh in your terminal or approve the Keychain prompt)" >&2
-    exit 2
+if [[ "$ADHOC" -eq 0 ]]; then
+  REQ="=designated => identifier \"$BUNDLE_ID\" and certificate leaf = H\"$CERT_SHA1\""
+
+  LOCK_ON_EXIT=1
+  if [[ -n "${HOTKEYD_SIGNING_PASSWORD:-}" ]]; then
+    # Pipe via `security -i` stdin with pre-validated double-quoted escaping so the password never appears in `ps`.
+    Q_PASS="$(security_quote "$HOTKEYD_SIGNING_PASSWORD")"
+    Q_KEYCHAIN="$(security_quote "$KEYCHAIN")"
+    printf 'unlock-keychain -p %s %s\n' "$Q_PASS" "$Q_KEYCHAIN" | /usr/bin/security -i
+  elif ! /usr/bin/security show-keychain-info "$KEYCHAIN" >/dev/null 2>&1; then
+    # Note: in a macOS GUI session, `show-keychain-info` prompts via SecurityAgent and unlocks
+    # `$KEYCHAIN` when approved; we only reach here if that dialog was cancelled or unavailable.
+    if [[ ! -t 0 ]]; then
+      echo "error: $KEYCHAIN remains locked (run ./scripts/build.sh in your terminal or approve the Keychain prompt)" >&2
+      exit 2
+    fi
+    /usr/bin/security unlock-keychain "$KEYCHAIN"
   fi
-  /usr/bin/security unlock-keychain "$KEYCHAIN"
-fi
 
-/usr/bin/security list-keychains -d user -s "$KEYCHAIN" "${ORIG_KEYCHAINS[@]}"
+  /usr/bin/security list-keychains -d user -s "$KEYCHAIN" "${ORIG_KEYCHAINS[@]}"
+fi
 
 install_staged_binary() {
   local target="$1"
@@ -174,14 +197,22 @@ install_staged_binary() {
   /bin/cp "$BIN" "$stage"
   /bin/chmod 0755 "$stage"
 
-  /usr/bin/codesign --force \
-    --sign "$CERT_SHA1" \
-    --keychain "$KEYCHAIN" \
-    --options runtime \
-    --timestamp=none \
-    --identifier "$BUNDLE_ID" \
-    --requirements "$REQ" \
-    "$stage" >/dev/null
+  if [[ "$ADHOC" -eq 1 ]]; then
+    /usr/bin/codesign --force \
+      --sign - \
+      --options runtime \
+      --identifier "$BUNDLE_ID" \
+      "$stage" >/dev/null
+  else
+    /usr/bin/codesign --force \
+      --sign "$CERT_SHA1" \
+      --keychain "$KEYCHAIN" \
+      --options runtime \
+      --timestamp=none \
+      --identifier "$BUNDLE_ID" \
+      --requirements "$REQ" \
+      "$stage" >/dev/null
+  fi
 
   /usr/bin/codesign --verify --deep --strict "$stage"
   /bin/mv -f "$stage" "$target"
@@ -202,6 +233,13 @@ REQUIREMENT="$(/usr/bin/codesign -d -r- "$DEST" 2>&1 | /usr/bin/tail -1)"
 echo "  binary   $DEST"
 echo "  identity $REQUIREMENT"
 
+if [[ "$ADHOC" -eq 1 ]]; then
+  echo "  signing  ad-hoc + Hardened Runtime (--adhoc)"
+  echo "  note     local certificate signing prevents macOS from resetting Accessibility on every rebuild"
+  echo "           and enables SELECTED_TEXT / --allow-accessibility."
+  echo "           switch anytime: ./scripts/setup-signing.sh && ./scripts/build.sh --install"
+fi
+
 if [[ -z "${HOTKEYD_BIN:-}" && "$DEST" != "$HOME/bin/hotkeyd" && -e "$HOME/bin/hotkeyd" ]]; then
   echo "  warning  found another copy at $HOME/bin/hotkeyd; remove it to avoid PATH shadowing" >&2
 fi
@@ -216,10 +254,21 @@ case ":$ORIG_PATH:" in
     ;;
 esac
 
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+PLIST_IS_ADHOC=0
+if [[ -f "$PLIST" && ! -L "$PLIST" ]] && /usr/bin/grep -Fq '<string>--allow-adhoc</string>' "$PLIST"; then
+  PLIST_IS_ADHOC=1
+fi
+
 DAEMON_INSTALLED=0
 if [[ "$MODE" == "--install" ]]; then
-  "$DEST" daemon install --binary "$DEST" --no-open >/dev/null
-  echo "  daemon   installed and running"
+  if [[ "$ADHOC" -eq 1 ]]; then
+    "$DEST" daemon install --binary "$DEST" --allow-adhoc --no-open >/dev/null
+    echo "  daemon   installed and running (--allow-adhoc)"
+  else
+    "$DEST" daemon install --binary "$DEST" --no-open >/dev/null
+    echo "  daemon   installed and running"
+  fi
   DAEMON_INSTALLED=1
   if ! "$DEST" doctor >/dev/null 2>&1; then
     echo "  action   enable \"hotkeyd\" in System Settings > Privacy & Security > Accessibility"
@@ -227,14 +276,26 @@ if [[ "$MODE" == "--install" ]]; then
 elif /bin/launchctl print "gui/$UID/$LABEL" >/dev/null 2>&1; then
   DAEMON_INSTALLED=1
   if [[ "$MODE" != "--no-restart" ]]; then
-    "$DEST" daemon restart >/dev/null || true
-    echo "  daemon   restarted"
+    if [[ "$ADHOC" -eq 1 && "$PLIST_IS_ADHOC" -eq 0 ]]; then
+      echo "  warning  installed LaunchAgent expects a certificate-signed binary; skipping restart" >&2
+      echo "  hint     run ./scripts/build.sh --adhoc --install to switch the LaunchAgent to --allow-adhoc" >&2
+    else
+      "$DEST" daemon restart >/dev/null || true
+      echo "  daemon   restarted"
+      if [[ "$ADHOC" -eq 0 && "$PLIST_IS_ADHOC" -eq 1 ]]; then
+        echo "  note     LaunchAgent still passes --allow-adhoc; run ./scripts/build.sh --install to switch to full signed mode" >&2
+      elif [[ "$ADHOC" -eq 1 ]]; then
+        echo "  note     ad-hoc rebuild changed the binary CDHash; re-toggle Accessibility in System Settings if shortcuts stop responding" >&2
+      fi
+    fi
   fi
 fi
 
 NEXT_SUBCMD="init"
 if [[ "$DAEMON_INSTALLED" -eq 1 ]]; then
   NEXT_SUBCMD="doctor"
+elif [[ "$ADHOC" -eq 1 ]]; then
+  NEXT_SUBCMD="init --allow-adhoc"
 fi
 
 if [[ "$ON_PATH" -eq 1 ]]; then

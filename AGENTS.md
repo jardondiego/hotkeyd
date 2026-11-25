@@ -17,7 +17,7 @@ Hotkeyd is a 100% pure-Swift, dependency-free headless global keyboard shortcut 
 | `Sources/selftest/` | Dependency-free executable test suite (no XCTest required; supports `--list` and `--filter <name>`) |
 | `Resources/Info.plist` | Embedded Mach-O bundle metadata (`CFBundleIdentifier = io.github.jardondiego.hotkeyd`, `LSUIElement = true`) |
 | `scripts/setup-signing.sh` | One-time generator for `~/Library/Keychains/hotkeyd-signing.keychain-db` (`Hotkeyd Local Signing` leaf cert) |
-| `scripts/build.sh` | Release builder + Hardened Runtime (`CS_RUNTIME`) leaf-anchored signer + staged installer (`~/.local/bin/hotkeyd`) + refreshes `~/.local/share/man/man1/hotkeyd.1` |
+| `scripts/build.sh` | Release builder + Hardened Runtime (`CS_RUNTIME`) leaf-anchored signer (or optional `--adhoc` without Keychain cert) + staged installer (`~/.local/bin/hotkeyd`) + refreshes `~/.local/share/man/man1/hotkeyd.1` |
 | `scripts/test.sh` | Builds debug targets and runs `selftest` (forwards `--list` / `--filter <name>`) |
 | `scripts/check.sh` | Canonical verification gate (`bash -n scripts/*.sh`, `git diff --check`, `./scripts/test.sh`, and `swift build -c release`; pass `--fast` to skip release build) |
 | `docs/` | On-demand deep references: [docs/architecture.md](docs/architecture.md) (event-tap pipeline, lock ordering, Caps Lock, reload lifecycle) and [docs/security-model.md](docs/security-model.md) (threat model, trust boundaries, CodeTrust/StrictModes) |

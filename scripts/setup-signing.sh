@@ -43,7 +43,7 @@ reject_control_chars() {
     echo "error: $label must not contain newline or carriage-return characters" >&2
     exit 2
   fi
-  if printf '%s' "$value" | /usr/bin/LC_ALL=C /usr/bin/grep -q '[[:cntrl:]]'; then
+  if printf '%s' "$value" | LC_ALL=C /usr/bin/grep -q '[[:cntrl:]]'; then
     echo "error: $label must not contain control characters" >&2
     exit 2
   fi

@@ -3169,23 +3169,71 @@ func testUXAndAgentContractFixes() {
         expectEqual(lstat(symCfg.path, &editedSt), 0, "`hotkeyd edit` created .hotkeyd")
         expectEqual(editedSt.st_mode & 0o777, 0o600, "`hotkeyd edit` saved .hotkeyd with mode 0600")
 
-        // Verify scripts/build.sh and scripts/setup-signing.sh reject newline injection in env vars with exit 2
-        let repoRoot = binDir.deletingLastPathComponent().deletingLastPathComponent()
-        let buildScript = repoRoot.appendingPathComponent("scripts/build.sh")
-        let setupScript = repoRoot.appendingPathComponent("scripts/setup-signing.sh")
-        if fm.fileExists(atPath: buildScript.path) && fm.fileExists(atPath: setupScript.path) {
+        // Verify scripts/build.sh and scripts/setup-signing.sh reject newline injection and parse flags safely
+        var repoRootCandidate = binDir
+        var foundRepoRoot: URL?
+        for _ in 0..<5 {
+            if fm.fileExists(atPath: repoRootCandidate.appendingPathComponent("scripts/build.sh").path)
+                && fm.fileExists(atPath: repoRootCandidate.appendingPathComponent("scripts/setup-signing.sh").path) {
+                foundRepoRoot = repoRootCandidate
+                break
+            }
+            repoRootCandidate = repoRootCandidate.deletingLastPathComponent()
+        }
+        expect(foundRepoRoot != nil, "selftest locates repo root containing scripts/build.sh and scripts/setup-signing.sh")
+        if let repoRoot = foundRepoRoot {
+            let buildScript = repoRoot.appendingPathComponent("scripts/build.sh")
+            let setupScript = repoRoot.appendingPathComponent("scripts/setup-signing.sh")
             let nlBuild = ShellRunner.run(
                 command: "HOTKEYD_SIGNING_PASSWORD=$'pass\\nhelp' '\(buildScript.path)'",
                 cwd: repoRoot.path,
                 timeoutMilliseconds: 5_000
             )
             expectEqual(nlBuild.exitCode, 2, "scripts/build.sh rejects newline in HOTKEYD_SIGNING_PASSWORD with exit 2")
+            let nlBuildAdhoc = ShellRunner.run(
+                command: "HOTKEYD_SIGNING_PASSWORD=$'pass\\nhelp' '\(buildScript.path)' --adhoc",
+                cwd: repoRoot.path,
+                timeoutMilliseconds: 5_000
+            )
+            expectEqual(nlBuildAdhoc.exitCode, 2, "scripts/build.sh --adhoc still rejects newline in HOTKEYD_SIGNING_PASSWORD with exit 2")
+            let helpBuild = ShellRunner.run(
+                command: "'\(buildScript.path)' --help",
+                cwd: repoRoot.path,
+                timeoutMilliseconds: 5_000
+            )
+            expectEqual(helpBuild.exitCode, 0, "scripts/build.sh --help exits 0")
+            expect(helpBuild.stdout.contains("--adhoc"), "scripts/build.sh --help documents --adhoc")
+            expect(helpBuild.stdout.contains("Accessibility"), "scripts/build.sh --help explains Accessibility caveat for --adhoc")
+            let conflictBuild = ShellRunner.run(
+                command: "'\(buildScript.path)' --install --no-restart",
+                cwd: repoRoot.path,
+                timeoutMilliseconds: 5_000
+            )
+            expectEqual(conflictBuild.exitCode, 2, "scripts/build.sh rejects conflicting --install --no-restart with exit 2")
+            let bogusBuild = ShellRunner.run(
+                command: "'\(buildScript.path)' --adhoc --bogus",
+                cwd: repoRoot.path,
+                timeoutMilliseconds: 5_000
+            )
+            expectEqual(bogusBuild.exitCode, 2, "scripts/build.sh rejects unknown option combined with --adhoc")
+            let ctrlBuild = ShellRunner.run(
+                command: "HOTKEYD_SIGNING_PASSWORD=$'pass\\x1b[31m' '\(buildScript.path)' --adhoc",
+                cwd: repoRoot.path,
+                timeoutMilliseconds: 5_000
+            )
+            expectEqual(ctrlBuild.exitCode, 2, "scripts/build.sh rejects ESC control chars in HOTKEYD_SIGNING_PASSWORD with exit 2")
             let nlSetup = ShellRunner.run(
                 command: "HOTKEYD_KEYCHAIN=$'/tmp/k\\nhelp' '\(setupScript.path)'",
                 cwd: repoRoot.path,
                 timeoutMilliseconds: 5_000
             )
             expectEqual(nlSetup.exitCode, 2, "scripts/setup-signing.sh rejects newline in HOTKEYD_KEYCHAIN with exit 2")
+            let ctrlSetup = ShellRunner.run(
+                command: "HOTKEYD_KEYCHAIN=$'/tmp/k\\x1b[31m' '\(setupScript.path)'",
+                cwd: repoRoot.path,
+                timeoutMilliseconds: 5_000
+            )
+            expectEqual(ctrlSetup.exitCode, 2, "scripts/setup-signing.sh rejects ESC control chars in HOTKEYD_KEYCHAIN with exit 2")
         }
     }
 
