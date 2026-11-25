@@ -1,15 +1,17 @@
 # hotkeyd
 
-Global keyboard shortcuts for macOS, from the command line. Headless daemon, no Dock icon, no menu bar — plus an opt-in hold-`fn` quick-reference overlay and Spotlight search HUD.
+Global keyboard shortcuts for macOS, from the command line. Headless pure-Swift daemon — no Dock icon, no menu bar — with an opt-in hold-`fn` cheatsheet overlay and Spotlight search HUD.
 
-Four trigger types, one unified schema (`keys` + `tap` and/or `doubleTap`):
+[Install](#install) · [Features](#features) · [Compare](#how-hotkeyd-compares) · [Commands](#commands) · [Config](#config) · [Security](#signing--security) · [Troubleshooting](#troubleshooting--uninstall)
 
-- **key combos** — `cmd+shift+c`, `ctrl+alt+k`, `f13`, `fn+space`, `capsLock+space`
-- **two-step sequences** — tap a modifier leader, then press a key (`fn > q`, `rcmd > space`, `capsLock > a`; or shell-safe `fn:q`)
-- **double-tapped modifiers** — ⌘, ⌥, ⌃, ⇧, `fn` (`globe`), or **Caps Lock**
-- **double-tapped key combos** — hold `fn`, tap `esc` twice
+---
 
-Simple `open -a <App>`, `open <https://...>`, and `open <~/dir>` commands run natively via `NSWorkspace` without spawning a shell (and bypass the shell worker pool so slow scripts never starve app switching). Arbitrary shell commands run `/bin/zsh -fc <command>` (`NO_RCS`) with a scrubbed environment and disclaim the daemon's Accessibility TCC responsibility by default (`--allow-accessibility` opts in). Commands whose string contains `SELECTED_TEXT` automatically receive `SELECTED_TEXT` and `SELECTED_TEXT_STATUS` (`ok`, `empty`, `secure`, `disabled`, `untrusted`) via macOS Accessibility without touching the clipboard or needing `--allow-accessibility`.
+### Four triggers, one schema
+
+- **Key combos** — `cmd+shift+c`, `ctrl+alt+k`, `f13`, `fn+space`, `capsLock+space`
+- **Two-step sequences** — tap a modifier leader, then press a key (`fn > q`, `rcmd > space`, `capsLock > a`; shell-safe `fn:q`)
+- **Double-tapped modifiers** — ⌘, ⌥, ⌃, ⇧, `fn` (`globe`), or **Caps Lock**
+- **Double-tapped key combos** — hold `fn`, tap `esc` twice
 
 ```bash
 hotkeyd add cmd+shift+c 'open -a "Google Chrome"'
@@ -19,97 +21,113 @@ hotkeyd add lcmd 'open -a Terminal'
 hotkeyd add opt 'open https://github.com'
 hotkeyd add fn+escape --tap 'osascript -e "set volume output muted true"' \
                        --double-tap 'osascript -e "set volume output volume 100"'
-hotkeyd daemon install
+hotkeyd init
 hotkeyd doctor
 ```
+
+- **Fast native launches:** `open -a <App>`, `open <https://...>`, and `open <~/dir>` run directly via `NSWorkspace` (zero shell spawn, never blocked by slow scripts).
+- **Safe shell actions:** Arbitrary commands run in `/bin/zsh -fc` (`NO_RCS`) with a scrubbed environment and disclaimed Accessibility TCC by default (`--allow-accessibility` opts in).
+- **Clipboard-free selection:** Commands referencing `SELECTED_TEXT` receive highlighted text (and `SELECTED_TEXT_STATUS`: `ok`, `empty`, `secure`, `disabled`, `untrusted`) via Accessibility without touching your clipboard.
+
+---
 
 ## Install
 
 Requires **macOS 14.5+** and Apple Command Line Tools 16+ (Swift 6, tested on Apple Silicon) — no Xcode needed.
+
+### Recommended (keeps Accessibility across rebuilds)
 
 ```bash
 git clone https://github.com/jardondiego/hotkeyd.git
 cd hotkeyd
 ./scripts/setup-signing.sh
 ./scripts/build.sh
-export PATH="$HOME/.local/bin:$PATH"   # add this line to ~/.zshrc to persist
+export PATH="$HOME/.local/bin:$PATH"   # add to ~/.zshrc to persist
 hotkeyd init
 ```
 
-`setup-signing.sh` creates a dedicated local signing keychain (`~/Library/Keychains/hotkeyd-signing.keychain-db`, `0600`, auto-locked). `build.sh` compiles from source, asks to unlock that keychain once to sign with Hardened Runtime (`CS_RUNTIME`) and a leaf-anchored Designated Requirement, installs `~/.local/bin/hotkeyd`, and installs the `hotkeyd(1)` manual page (`~/.local/share/man/man1/hotkeyd.1`). If you prefer not to edit `PATH`, invoke `~/.local/bin/hotkeyd init` directly.
+- `setup-signing.sh` creates a dedicated `0600` local signing keychain (`~/Library/Keychains/hotkeyd-signing.keychain-db`, auto-locked).
+- `build.sh` compiles a release binary, signs it with Hardened Runtime (`CS_RUNTIME`) and a leaf-anchored requirement, and installs `~/.local/bin/hotkeyd` + `man hotkeyd`.
+- `hotkeyd init` walks through first-time setup in under a minute (trust check, optional 3 starter shortcuts, LaunchAgent install, live Accessibility check, and trigger verification).
 
-**Just trying it out?** You can skip the local signing keychain with `--adhoc`:
+### Quick try (skip local signing keychain)
 
 ```bash
 ./scripts/build.sh --adhoc
-export PATH="$HOME/.local/bin:$PATH"   # add this line to ~/.zshrc to persist
+export PATH="$HOME/.local/bin:$PATH"   # add to ~/.zshrc to persist
 hotkeyd init --allow-adhoc
 ```
 
-> Local certificate signing (`setup-signing.sh`) is recommended for daily use — without it, macOS resets Accessibility permission whenever you rebuild or upgrade, and `SELECTED_TEXT` / `--allow-accessibility` stay disabled. You can switch anytime with `./scripts/setup-signing.sh && ./scripts/build.sh --install`.
+> [!NOTE]
+> Local certificate signing (`setup-signing.sh`) is recommended for daily use — without it, macOS resets Accessibility permission whenever you rebuild or upgrade, and `SELECTED_TEXT` / `--allow-accessibility` stay disabled. Switch anytime with `./scripts/setup-signing.sh && ./scripts/build.sh --install`.
 
-`hotkeyd init` guides first-time setup in under a minute: validates binary trust and `~/.hotkeyd`, optionally creates 3 auto-detected starter shortcuts (default browser, active terminal, Home folder), installs the LaunchAgent with live Accessibility polling, and runs a safe live trigger verification. You can also install dynamic shell completions (`hotkeyd completions zsh --install`) and read `man hotkeyd`.
+**Post-install tips:** Install dynamic shell completions with `hotkeyd completions zsh --install` (also supports `bash` and `fish`), read `man hotkeyd`, or run `hotkeyd doctor` anytime to diagnose issues. If you skip editing `PATH`, run `~/.local/bin/hotkeyd` directly.
 
-`hotkeyd doctor` tells you exactly what is missing and how to fix it.
+---
 
-## Why this is not "just another hotkey app"
+## Features
 
-**It can take keys apps already use.** A session-level `CGEventTap` sees key events before the
-focused app does, so a binding can override an existing shortcut instead of only adding a free
-one. (⌘⇧c, for example, is Chrome's "inspect element" until hotkeyd swallows it.)
+### Triggers & Gestures
 
-**Caps Lock becomes a real gesture key.** macOS toggles Caps Lock below the event tap, so it is
-remapped to F18 at the HID level; the tap can then see, swallow, double-tap, or hold it as a chord modifier (`capsLock+space`). The daemon automatically re-applies the remap across sleep/wake and external keyboard hotplug, swallows raw F18 during Secure Input, and removes the remap when stopped so a dead daemon never costs you a Caps Lock key.
+- **Override existing app shortcuts:** A session-level `CGEventTap` intercepts key events before the focused app sees them (e.g. `⌘⇧C` overrides Chrome's Inspect Element unless `--pass-through` is set).
+- **Release-based modifier double-taps:** Fires on the second *release*, not press — so a fast `cmd, cmd+k` never triggers accidentally, and releasing a prior letter during fast typing never drops tap 1.
+- **Paired tap & double-tap combos:** Hold modifiers, tap the key once or twice. Single taps flush immediately on modifier release; double-tap-only combos (e.g. `fn+e`) swallow tap 1 cleanly.
+- **Two-step sequences (`fn > q` / `fn:q`):** A clean bare modifier tap (`<= 250 ms`) arms a short-lived leader (`maxSequenceDelayMs`: `250 ms` default, `100..1500 ms`). Unbound step-2 keys pass through immediately; Apple Silicon Globe (`179`) events after `fn` are ignored; unsided `shift` is forbidden as a leader (use `lshift` / `rshift`).
+- **Left & right modifier precision:** `lcmd`/`rcmd`, `lopt`/`ropt`, `lctrl`/`rctrl`, `lshift`/`rshift` target one side; `cmd`/`opt`/`ctrl`/`shift` match either (exact side wins over family fallback). Modifier events are never swallowed, so keys can never get stuck.
 
-Caps **state** is separate from the key, and it lives in IOHIDSystem — `CGEventSource.flagsState`
-is not authoritative and can report "off" while the keyboard types uppercase. hotkeyd reads and
-sets the state through `IOHIDGet/SetModifierLockState`, so `hotkeyd caps status` shows the truth.
+### Caps Lock as a Real Key
 
-If caps is on when the remap is applied, the key can no longer toggle it off. Enabling the remap
-therefore forces the state off first and refuses to proceed if it cannot; while remapped, a
-coalesced watchdog clears any stuck caps-on state automatically. `hotkeyd caps reset` is the manual
-equivalent, and `hotkeyd caps off` restores the key and stands the watchdog down.
+- **HID-level remap to F18:** Remaps Caps Lock below the event tap so it works as a double-tap, sequence leader (`capsLock > a`), or chord modifier (`capsLock+space`).
+- **Self-healing lifecycle:** Automatically re-applies across sleep/wake and external keyboard hotplug, swallows raw F18 during Secure Input, and removes the remap on stop/uninstall so a dead daemon never costs you Caps Lock.
+- **Authoritative LED state:** Reads and writes true lock state via `IOHIDGet/SetModifierLockState` (`hotkeyd caps status` / `reset` / `off`), forces Caps off before remapping, and runs an automatic stuck-caps watchdog.
 
-**Modifier double-taps are detected on the second *release*, not the second press.** If it fired
-on the second press, a fast `cmd, cmd+k` would launch an app instead of doing what you asked.
-Firing on release means the second press must be a complete, clean tap, and any `keyDown`, mouse event,
-or extra modifier in between cancels it (while releasing a prior typed letter during fast typing rollover never drops tap 1).
+### Peek Cheatsheet & Spotlight Search (`hotkeyd peek`)
 
-**Double-tapped key combos** work the other way around: hold the modifiers, tap the key twice.
-A single tap waits out the combo double-tap window (250 ms default) before firing, so a double-tap runs only the
-double action. Releasing the modifier early flushes the single action immediately. Double-tap-only combos (like `fn+e`) swallow tap 1 so macOS does not trigger a stray shortcut before tap 2.
+Opt in with `hotkeyd peek enable`, then:
 
-**Two-step sequences (`<modifier> > <key>`)** let a clean bare modifier tap (`<= 250 ms`) act as a short-lived leader before a regular key press (default `maxSequenceDelayMs`: `250 ms`, configurable `100..1500 ms`). On the CLI, you can pass either quoted `'fn > q'` or shell-safe `fn:q` (both canonicalize to `fn > q`). Unbound step-2 keys pass straight through and disarm immediately, firing a bare-modifier `doubleTap` disarms any active leader, synthetic Apple Silicon Globe (`179`) events after `fn` are ignored, and unsided `shift` is forbidden as a sequence leader (use `lshift` or `rshift`).
+- **Hold `fn` (`450 ms` default):** Opens a zero-focus-steal monochrome cheatsheet grouped by trigger family with side-aware keycaps (`L⌘`, `R⌘`, `fn`, `⇪`). Release `fn` to hide, press a key to run it immediately, or tap `Tab` to pin hands-free.
+- **Live modifier spotlighting:** While pinned (or opened via `hotkeyd peek` / `--toggle`), holding *any* modifier highlights its related shortcuts in place with zero layout jump.
+- **Spotlight fuzzy search:** Press `/` (or run `hotkeyd peek --search` / bind `--search-toggle`) to search shortcuts ranked by `actions.log` frequency — `Enter` runs, `Esc` closes, `⌘C` copies keys, `⌘⇧C` copies the command.
+- **Isolated helper subprocess:** Rendered inside a lazy, strictly one-way TCC-disclaimed helper that exits on idle so the daemon stays 100% headless (`[AX]`, `[SEL]`, and `[off]` bindings stay muted and prompt to press their key directly).
 
-**Modifier events are never swallowed.** A gesture consumes nothing, so it can never drop a ⌘
-or leave a key stuck. The detector only observes.
+### Built for AI Agents & Automation
 
-**Left and right modifiers are distinct.** `lcmd`, `rcmd`, `lopt`, `ropt`, `lctrl`, `rctrl`,
-`lshift`, `rshift` address one side; `cmd`, `opt`, `ctrl`, `shift` match either side. If both a
-side-specific and a side-agnostic binding exist, the exact side wins and the family-level one is
-the fallback for the other side.
-
-**Zero-focus-steal peek cheatsheet & Spotlight search (`hotkeyd peek`).** Opt in with `hotkeyd peek enable`, then hold `fn` (450 ms default) to glance at all your shortcuts auto-grouped by trigger family with side-aware keycaps (`L⌘`, `R⌘`, `fn`, `⇪`); release `fn` to hide, press a binding's key to run it immediately, or tap `Tab` to pin the overlay open hands-free. Once pinned (or opened via `hotkeyd peek` / `hotkeyd peek set --toggle fn:/`), holding *any* modifier spotlights its related shortcuts in place with zero layout jump, and pressing `/` (or `hotkeyd peek --search` / `hotkeyd peek set --search-toggle fn:s`) opens a Spotlight-style fuzzy search launcher ranked by `actions.log` usage frequency (`Enter` runs, `Esc` closes immediately, `⌘C` copies keys, `⌘⇧C` copies the raw command). Rendered inside a lazy, strictly one-way TCC-disclaimed helper subprocess (`[AX]`, `[SEL]`, and `[off]` shortcuts show muted tags and prompt to press their key directly) that exits on idle so the daemon stays 100% headless.
-
-**It is built to be driven by agents.** Structured JSON envelopes (`--json`) across commands,
-explicit boolean DTOs (`enabled`, `passThrough`, `allowAccessibility`, `executionMode`, `usesSelectedText`),
-canonical `doubleTap:cmd` display strings that round-trip, `--dry-run` previews, `run --wait`
-to execute and inspect a shell action without a keyboard, and `doctor` with authoritative
-`runtime-state.json` health checks and deterministic non-zero exit codes.
+- **Structured JSON everywhere:** Consistent `--json` envelopes with explicit boolean DTOs (`enabled`, `passThrough`, `allowAccessibility`, `executionMode`, `usesSelectedText`) and round-tripping canonical keys (`doubleTap:cmd`).
+- **Self-describing & safe to automate:** `hotkeyd describe --json` exports the full CLI manifest, `hotkeyd schema` emits JSON Schema (draft 2020-12), `--dry-run` previews mutations, `run --wait` executes and inspects results without a keyboard, and `doctor` reports deterministic exit codes.
 
 ### How hotkeyd compares
 
 | Tool | Model | Caps Lock Gesture | Two-Step Sequences | Modifier Double-Tap | Peek / Search HUD | Agent JSON & Schema | Security Boundary |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **hotkeyd** | Pure-Swift headless CLI + LaunchAgent | Built-in (`hidutil` + IOKit LED + auto-restore) | Built-in (`fn > q`) | Built-in (2nd release, L/R-aware) | Opt-in monochrome Bento + Spotlight HUD | Full (`--json`, `describe`, JSON Schema) | Hardened Runtime, leaf-pinned cert, TCC disclaim, `0600` `StrictModes` |
-| **skhd** | Lightweight C daemon + rc file | External (`hidutil`/Karabiner) | Modes | No | No | No | Standard user process |
-| **Karabiner-Elements** | Kernel/DriverKit virtual HID remapper | Full low-level remap & layers | Via complex JSON rules | Via complex JSON rules | No | No | DriverKit virtual device |
-| **Hammerspoon** | Lua automation platform | Via Lua/external | Via Lua modal hotkeys | Via Lua eventtap | Custom Lua canvas | No | Full Lua runtime |
-| **Raycast** | Full GUI launcher & extension suite | External (Hyper key) | No | Alias/extension | GUI launcher | No | GUI app |
+| **hotkeyd** | Pure-Swift CLI + LaunchAgent | Built-in (`hidutil` + IOKit + auto-restore) | Built-in (`fn > q`) | Built-in (2nd release, L/R-aware) | Opt-in Bento + Spotlight HUD | Full (`--json`, `describe`, Schema) | Hardened Runtime, leaf cert, TCC disclaim, `0600` `StrictModes` |
+| **skhd** | C daemon + rc file | External (`hidutil`/Karabiner) | Modes | No | No | No | Standard user process |
+| **Karabiner-Elements** | DriverKit virtual HID remapper | Full remap & layers | Complex JSON rules | Complex JSON rules | No | No | DriverKit virtual device |
+| **Hammerspoon** | Lua automation platform | Via Lua/external | Lua modal hotkeys | Lua eventtap | Custom Lua canvas | No | Full Lua runtime |
+| **Raycast** | GUI launcher & extensions | External (Hyper key) | No | Alias/extension | GUI launcher | No | GUI app |
 
-Use **hotkeyd** if you want a fast, single-file, version-controlled CLI hotkey daemon with left/right modifier double-taps, two-step sequences, safe `SELECTED_TEXT` scripts, and an optional cheatsheet/search HUD without running a GUI app or Lua runtime. Use **Karabiner-Elements** if you need low-level keyboard layers/remapping, or **Hammerspoon** if you want full Lua window-management scripting.
+Use **hotkeyd** for a fast, single-file, version-controlled CLI hotkey daemon with L/R modifier double-taps, two-step sequences, safe `SELECTED_TEXT` scripts, and an optional cheatsheet/search HUD — without a GUI app or Lua runtime. Use **Karabiner-Elements** for low-level key remapping/layers, or **Hammerspoon** for full Lua window management.
+
+---
 
 ## Commands
+
+### Everyday commands
+
+| Command | Purpose |
+| :--- | :--- |
+| `hotkeyd init` | Interactive first-time setup (trust check, starter bindings, LaunchAgent, verification) |
+| `hotkeyd add <keys> <cmd>` | Add a shortcut (`--tap`, `--double-tap`, `--name`, `--allow-accessibility`, `--dry-run`) |
+| `hotkeyd set <keys\|name> ...` | Update command or metadata (`--name`, `--timeout`, `--clear-*`) |
+| `hotkeyd list` / `show` / `remove` | Inspect or delete bindings (`--full`, `--tap`, `--double-tap`) |
+| `hotkeyd enable` / `disable` | Temporarily toggle a shortcut without deleting it |
+| `hotkeyd edit` / `validate` | Edit `~/.hotkeyd` in `$EDITOR` with pre-save validation & rollover overlap checks |
+| `hotkeyd run <keys\|name>` | Trigger a shortcut from the CLI (`--wait` to capture exit code & output) |
+| `hotkeyd peek [enable\|--search]` | Open/configure the hold-`fn` cheatsheet and Spotlight fuzzy search HUD |
+| `hotkeyd pause` / `resume` / `panic` | Pause shortcuts (`--for 10m`), re-arm, or emergency-stop daemon & restore Caps Lock |
+| `hotkeyd status` / `logs` / `stats` / `doctor` | Inspect daemon state, tail logs (`-f`), view usage rankings, or run health diagnostics |
+
+<details>
+<summary><strong>Full CLI reference & flags</strong></summary>
 
 ```
 hotkeyd init [--starter <minimal|empty|skip>] [--no-daemon] [--no-open]
@@ -167,49 +185,41 @@ hotkeyd help [command] [--json]
 hotkeyd version [--json]
 ```
 
-Exit codes: `0` ok · `2` usage · `3` not found · `4` conflict/validation · `5` permission ·
-`6` daemon · `7` config IO/signing · `8` action failed.
+</details>
+
+**Exit codes:** `0` ok · `2` usage · `3` not found · `4` conflict/validation · `5` permission · `6` daemon · `7` config IO/signing · `8` action failed.
 
 ### Examples
 
 ```bash
-# Launch (or focus) an app on modifier double-tap (runs natively via NSWorkspace)
+# App & URL launches (native NSWorkspace, zero shell spawn)
 hotkeyd add cmd 'open -a Terminal'
-
-# Open a URL on modifier double-tap (runs natively via NSWorkspace)
 hotkeyd add opt 'open https://github.com'
-
-# Single-tap key combo
 hotkeyd add cmd+shift+c 'open -a "Google Chrome"'
 
-# Two-step modifier > key sequence (quoted 'fn > q' or shell-safe fn:q)
+# Two-step sequences (quoted 'fn > q' or shell-safe fn:q)
 hotkeyd add fn:q 'open -a Safari'
 hotkeyd add rcmd:f1 'open ~/Projects' --max-sequence-delay 400
 
-# Pair single-tap and double-tap on the same key chord (fn+escape)
+# Pair single-tap and double-tap on the same chord
 hotkeyd add fn+escape \
   --tap 'osascript -e "set volume output muted true"' \
   --double-tap 'osascript -e "set volume output volume 100" -e "set volume output muted false"'
 
-# Update metadata on an existing shortcut without re-passing its command
+# Metadata updates, inspection & toggling
 hotkeyd set fn+space --name 'Screenshot' --timeout 60000
-
-# Inspect a shortcut in full, or disable/re-enable it temporarily
 hotkeyd show Screenshot
-hotkeyd disable Screenshot
-hotkeyd enable Screenshot
-
-# Validate config & check for mod+key vs mod > key rollover overlaps
+hotkeyd disable Screenshot && hotkeyd enable Screenshot
 hotkeyd validate
 
-# Operate on highlighted text without touching the clipboard or granting --allow-accessibility
+# Highlighted-text search (no clipboard touch, no --allow-accessibility needed)
 hotkeyd add fn+c 'q="${SELECTED_TEXT:-$(pbpaste)}"; [ -n "$q" ] && open "https://www.google.com/search?q=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote_plus(sys.argv[1]))" "$q")"'
 
-# Explicitly opt a trusted accessibility script into inheriting TCC attribution
+# Opt a trusted script into inheriting Accessibility TCC attribution
 hotkeyd add fn 'yabai -m window --display next' --allow-accessibility
 ```
 
-### Agents
+### Agent / scripting usage
 
 ```bash
 hotkeyd describe --json                   # full manifest of commands, flags, keys & exit codes
@@ -221,13 +231,13 @@ hotkeyd run cmd --wait --json             # {ok, data: {name, command, detached,
 hotkeyd doctor --json | jq '.data.checks[] | select(.ok == false)'
 ```
 
-The config lives at **`~/.hotkeyd`** — easy to find, diff and version. Logs and `runtime-state.json` stay in
-`~/Library/Application Support/Hotkeyd/`. Set `HOTKEYD_HOME` to sandbox an experiment
-without touching real bindings.
+Set `HOTKEYD_HOME` to sandbox experiments without touching your live `~/.hotkeyd` or LaunchAgent.
+
+---
 
 ## Config
 
-`~/.hotkeyd`, written atomically (one line per shortcut), mode `0600`:
+Bindings live in **`~/.hotkeyd`** (plain JSON, one line per shortcut, written atomically with mode `0600`). Logs and `runtime-state.json` live in `~/Library/Application Support/Hotkeyd/`.
 
 ```json
 {
@@ -241,105 +251,100 @@ without touching real bindings.
 }
 ```
 
-Reserved combinations are refused rather than silently stolen: ⌘q, ⌃⌘q (Lock Screen), ⌘⇧q / ⌘⇧⌥q (Log Out), ⌘⌥esc (Force Quit), ⌘tab, ⌘`, ⌘space (unsided only; `lcmd+space` / `rcmd+space` are allowed because the other side keeps Spotlight), ⌃f1–f3, `shift` alone on non-function keys, and `shift > <key>` (unsided `shift` sequence leader). A key combo or sequence step-2 key is swallowed (it never reaches the app) unless `passThrough` is set.
+- **Live reload:** The daemon watches `~/.hotkeyd` (125 ms debounce) and reloads automatically on change.
+- **Dotfiles:** Restore with `install -m 0600 path/to/.hotkeyd ~/.hotkeyd` (symlinks and `0644` permissions are rejected by `StrictModes`), or edit safely via `hotkeyd edit`.
+- **Reserved system shortcuts:** Refused rather than stolen — `⌘Q`, `⌃⌘Q` (Lock Screen), `⌘⇧Q` / `⌘⇧⌥Q` (Log Out), `⌘⌥Esc` (Force Quit), `⌘Tab`, `` ⌘` ``, unsided `⌘Space` (`lcmd+space`/`rcmd+space` allowed), `⌃F1`–`F3`, bare `shift` on non-function keys, and `shift > <key>`.
 
-The daemon watches `~/.hotkeyd` (debounced 125 ms) and reloads on change. When restoring from a dotfiles repo, use `install -m 0600 path/to/.hotkeyd ~/.hotkeyd` (never symlink or leave `0644`, which `StrictModes` refuses) or edit safely via `hotkeyd edit`.
+### Timing defaults
 
-### Timing
+| Constant | Default | Configurable Range / Meaning |
+| :--- | :--- | :--- |
+| Tap max | `250 ms` | Longer than this is a hold, not a tap |
+| Modifier double-tap delay | `400 ms` | `maxDoubleTapDelayMs` (`100–600 ms`) between release 1 and press 2 |
+| Combo double-tap delay | `250 ms` | `maxDoubleTapDelayMs` (`100–600 ms`) for paired key combos |
+| Max sequence delay | `250 ms` | `maxSequenceDelayMs` (`100–1500 ms`) between step 1 release and step 2 press |
+| Peek hold delay | `450 ms` | `peek.delayMs` (`300–2000 ms`) before showing the opt-in cheatsheet |
+| Cooldown | `400 ms` | Ensures a triple-tap fires once |
 
-| Constant | Default | Meaning |
-|---|---|---|
-| tap max | 250 ms | longer than this is a hold, not a tap |
-| modifier double-tap delay | 400 ms | max gap between first release and second press (`maxDoubleTapDelayMs`, 100–600) |
-| combo double-tap delay | 250 ms | default double-tap window for paired key combos (`maxDoubleTapDelayMs`, 100–600) |
-| max sequence delay | 250 ms | max gap between releasing step 1 and pressing step 2 (`maxSequenceDelayMs`, 100–1500) |
-| peek hold delay | 450 ms | sustained modifier hold before showing the opt-in shortcut reference overlay (`peek.delayMs`, 300–2000) |
-| cooldown | 400 ms | a triple-tap fires once |
+---
 
 ## How it works
 
-- `hotkeyd daemon run` is a headless LaunchAgent. It owns the `CGEventTap`; the CLI never
-  touches it.
-- The daemon runs under launchd, so the Accessibility grant belongs to a stable code identity
-  at a stable path rather than to your terminal.
-- Bindings live in a plain `0600` JSON file (`~/.hotkeyd`), not in daemon memory, so deploying
-  from dotfiles with `install -m 0600` (or `hotkeyd edit`) reloads atomically.
+- **Headless LaunchAgent:** `hotkeyd daemon run` owns the `CGEventTap` under `launchd`; the CLI never touches the event tap, so Accessibility belongs to a stable code identity rather than your terminal.
+- **Stateless config:** Bindings live on disk in `0600` `~/.hotkeyd`, never only in daemon memory.
 
 ### Signing & Security
 
-`setup-signing.sh` creates a dedicated local signing keychain (`~/Library/Keychains/hotkeyd-signing.keychain-db`, mode `0600`, auto-locked after 300s) containing the `Hotkeyd Local Signing` certificate. `build.sh` signs the binary with Hardened Runtime (`--options runtime`) and a leaf-anchored designated requirement:
+`setup-signing.sh` creates a dedicated `0600` keychain (`~/Library/Keychains/hotkeyd-signing.keychain-db`, auto-locked after 300s) with the `Hotkeyd Local Signing` certificate, and `build.sh` signs with Hardened Runtime (`--options runtime`) plus a leaf-anchored designated requirement:
 
 ```
 designated => identifier "io.github.jardondiego.hotkeyd" and certificate leaf = H"<40-hex-sha1>"
 ```
 
-This keeps the Accessibility grant across rebuilds while preventing another local binary from spoofing `io.github.jardondiego.hotkeyd`. At startup (`hotkeyd daemon run`) and install (`hotkeyd daemon install`), `CodeTrust` and `StrictModes` verify:
+At startup and install, `CodeTrust` and `StrictModes` enforce:
 
-- Every path component from `/` to the binary and config directory is owned by `getuid()` or `root`, free of symlinks and `.` / `..` traversal components, and not group/world-writable.
-- Both the on-disk binary (`kSecCSStrictValidate | kSecCSCheckAllArchitectures`) and the live in-memory Mach task (`SecCodeCopySelf`) carry valid signatures, `CS_RUNTIME` (Hardened Runtime), zero relaxation or private entitlements (`get-task-allow`, `allow-dyld-environment-variables`, `disable-library-validation`, `allow-unsigned-executable-memory`, `disable-executable-page-protection`, `allow-jit`, `debugger`, `com.apple.private.*`), and a compiled leaf-certificate requirement (unless `--allow-adhoc` is explicitly passed).
-- `~/.hotkeyd` is opened via `openat` on a verified directory descriptor with `O_NOFOLLOW | O_NONBLOCK` and checked via `fstat` (`S_ISREG`, `st_uid == getuid()`, mode `0600`, `<= 1 MiB`), and the daemon goes inert whenever `IsSecureEventInputEnabled()` is active (still swallowing remapped Caps Lock F18 so password fields never receive raw F18).
-- Child `/bin/zsh -fc` processes disclaim TCC responsibility via `responsibility_spawnattrs_setdisclaim` by default (and unconditionally under `HOTKEYD_HOME` or `--allow-adhoc`) and run in a scrubbed environment with root-owned system `PATH` entries ahead of Homebrew.
+- **Path hygiene:** Every component from `/` to the binary and config dir is owned by `getuid()` or `root`, symlink-free, traversal-free, and not group/world-writable.
+- **Binary & live-process trust:** Validates both on-disk (`kSecCSStrictValidate | kSecCSCheckAllArchitectures`) and live in-memory (`SecCodeCopySelf`) signatures, `CS_RUNTIME`, zero relaxation or `com.apple.private.*` entitlements, and the compiled leaf anchor (unless `--allow-adhoc`).
+- **Config & password-field safety:** Opens `~/.hotkeyd` via `openat(O_NOFOLLOW | O_NONBLOCK)` + `fstat` (`0600`, `<= 1 MiB`), and pauses all triggers whenever `IsSecureEventInputEnabled()` is active (still swallowing remapped Caps Lock F18).
+- **TCC isolation:** Child `/bin/zsh -fc` processes disclaim Accessibility responsibility (`responsibility_spawnattrs_setdisclaim`) by default (and unconditionally under `HOTKEYD_HOME` or `--allow-adhoc`) with a scrubbed `PATH`.
+
+See [docs/security-model.md](docs/security-model.md) for the full threat model and trust boundaries, and [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
+---
 
 ## Troubleshooting & Uninstall
 
 ```bash
-hotkeyd doctor
-hotkeyd status
-hotkeyd validate
-hotkeyd logs -f
+hotkeyd doctor     # checks trust, permissions, LaunchAgent & Caps Lock
+hotkeyd status     # live runtime-state.json (daemon, tap, Secure Input)
+hotkeyd validate   # checks ~/.hotkeyd syntax & rollover overlaps
+hotkeyd logs -f    # tail live daemon & action logs
 ```
 
-- **Tap inactive** — enable `hotkeyd` in Accessibility. If the entry is missing, use `+` and
-  choose `~/.local/bin/hotkeyd`. If you moved the binary, re-add it: TCC remembers paths.
-- **Nothing fires** — `hotkeyd status` reads live `runtime-state.json` and shows whether the daemon
-  is running, whether the tap is active, and whether Secure Event Input is currently pausing shortcuts.
-- **Secure Input** — while a password field has Secure Input active, macOS pauses shortcuts
-  (and hotkeyd swallows remapped F18 so Caps Lock never leaks raw keys). Gestures resume when the field loses focus.
-- **Caps Lock** — `hotkeyd caps status` shows whether the F18 remap is active. `hotkeyd caps
-  off` restores it without needing the daemon, and `hotkeyd caps reset` clears a stuck caps
-  state. If another tool owns a HID key mapping, hotkeyd refuses to overwrite it and says so in
-  `doctor`.
-- **Forgot signing keychain password** — delete `~/Library/Keychains/hotkeyd-signing.keychain-db`,
-  re-run `./scripts/setup-signing.sh` and `./scripts/build.sh`, then re-toggle `hotkeyd` once in
-  System Settings → Privacy & Security → Accessibility.
-- **Complete uninstall** — run `hotkeyd daemon uninstall`, remove `~/.local/bin/hotkeyd`,
-  `~/Library/Application Support/Hotkeyd/`, `~/Library/Keychains/hotkeyd-signing.keychain-db`,
-  and `~/.hotkeyd`, then remove `hotkeyd` from System Settings → Privacy & Security → Accessibility.
+- **Tap inactive:** Enable `hotkeyd` in **System Settings → Privacy & Security → Accessibility** (click `+` and select `~/.local/bin/hotkeyd` if missing). Moving the binary requires re-adding it.
+- **Nothing fires:** Run `hotkeyd status` to verify the daemon is running, the tap is active, and Secure Event Input isn't pausing triggers.
+- **Secure Input:** Password fields pause shortcuts automatically (while still swallowing remapped F18); gestures resume once focus leaves the field.
+- **Caps Lock stuck or foreign mapping:** Check `hotkeyd caps status`, run `hotkeyd caps reset` for stuck caps state, or `hotkeyd caps off` to restore without the daemon. Hotkeyd refuses to overwrite foreign HID mappings (e.g. Karabiner-Elements) and reports them in `doctor`.
+- **Forgot signing keychain password:** Delete `~/Library/Keychains/hotkeyd-signing.keychain-db`, re-run `./scripts/setup-signing.sh && ./scripts/build.sh`, and re-toggle `hotkeyd` once in Accessibility.
+- **Complete uninstall:** Run `hotkeyd daemon uninstall`, delete `~/.local/bin/hotkeyd`, `~/Library/Application Support/Hotkeyd/`, `~/Library/Keychains/hotkeyd-signing.keychain-db`, and `~/.hotkeyd`, then remove `hotkeyd` from Accessibility settings.
+
+---
 
 ## Limitations & Non-Goals
 
 - **Global shortcuts only (for now):** Per-app or window-title scoping is not implemented yet.
-- **Not a low-level key remapper:** Hotkeyd triggers actions; it does not build keyboard layers or remap arbitrary keys (use Karabiner-Elements for that).
-- **Caps Lock coexistence:** When you add a `capsLock` binding, Hotkeyd remaps Caps Lock → F18 via `hidutil` and refuses to overwrite foreign mappings (such as Karabiner-Elements' Caps Lock rules).
-- **Source build only for now:** No prebuilt Developer ID notarized binary or Homebrew Cask yet — installation builds locally with Apple Command Line Tools 16+ (Swift 6).
+- **Not a low-level key remapper:** Triggers actions rather than building keyboard layers (use Karabiner-Elements for full remapping).
+- **Caps Lock coexistence:** Remaps Caps Lock → F18 via `hidutil` when a `capsLock` binding exists and refuses to overwrite foreign mappings.
+- **Source build only (for now):** No prebuilt Developer ID notarized binary or Homebrew Cask yet — builds locally with Apple Command Line Tools 16+ (Swift 6).
 - **Headless by design:** No menu bar icon, Dock icon, GUI settings window, or mouse-button triggers.
 
-See [SECURITY.md](SECURITY.md) for vulnerability reporting and [CHANGELOG.md](CHANGELOG.md) for release notes.
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
+---
 
 ## Development
 
 ```bash
 ./scripts/check.sh                   # full gate: bash -n, git diff --check, selftest, release build
-./scripts/test.sh                    # full selftest suite, no XCTest required
-./scripts/test.sh --filter init      # fast targeted run of one test suite (--list to see all)
+./scripts/test.sh                    # full selftest suite (no XCTest required)
+./scripts/test.sh --filter init      # targeted suite (--list to view all)
 ./scripts/build.sh                   # build + sign + install binary & man page (restarts daemon)
 ./scripts/build.sh --install
 ./scripts/build.sh --adhoc --install # skip local cert keychain (resets Accessibility on rebuild)
 swift run hotkeyd-dev listen         # uninstalled interactive event-tap inspector (TTY only)
 ```
 
-Layout (100% pure Swift, zero external dependencies, zero C targets):
+100% pure Swift, zero external dependencies, zero C targets:
 
 ```
-Sources/HotkeydCore/      pure, testable logic: double-tap & sequence detectors, key combos,
-                           IOKit caps state/remap, RuntimeState, PauseState, PeekConfig,
-                           PeekModel, PeekSearch, StatsAnalyzer, SelectionReader, StrictModes,
-                           CodeTrust, Config, CommandRegistry, InitSupport, ShellCompletions,
-                           ManPageGenerator, and Darwin posix_spawn shell runner
-Sources/hotkeyd/          production CLI, onboarding, completions/man, stats, pause/resume,
-                           peek overlay & CLI, daemon, LaunchAgent
-Sources/hotkeyd-dev/      uninstalled developer event-tap inspector (listen, tap, modtap)
-Sources/selftest/         dependency-free executable test suite
+Sources/HotkeydCore/   core logic: detectors, key combos, IOKit caps, RuntimeState, PauseState,
+                       PeekConfig/Model/Search, StatsAnalyzer, SelectionReader, StrictModes,
+                       CodeTrust, Config, CommandRegistry, InitSupport, ShellCompletions,
+                       ManPageGenerator, and Darwin posix_spawn ShellRunner
+Sources/hotkeyd/       production CLI, onboarding, completions/man, stats, pause/resume,
+                       peek overlay & CLI, daemon, LaunchAgent
+Sources/hotkeyd-dev/   uninstalled developer event-tap inspector (listen, tap, modtap)
+Sources/selftest/      dependency-free executable test suite
 ```
 
 ## License
